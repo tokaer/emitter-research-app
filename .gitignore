@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+backend/.venv/
+
+# Build
+frontend/dist/
+
+# Data (generated)
+data/emitter.db*
+data/embeddings/
+
+# Large source data files (ecoinvent CSV)
+*Cut-off*.csv
+*Cut-off*.jsonl*
+*.xlsx
+
+# Environment
+backend/.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+__pycache__/
+*.pyc

@@ -1,0 +1,81 @@
+Task: Select the best emission dataset for the input OR declare ambiguity OR propose a decomposition.
+
+Input row:
+- Bezeichnung: "{bezeichnung}"
+- Produktinformationen: "{produktinformationen}"
+- Referenzeinheit: "{referenzeinheit}"
+- Region: "{region}"
+
+Candidates (each is a row from the ecoinvent database - do not modify any strings):
+{candidates_json}
+
+GHG SCOPE MATCHING (CRITICAL):
+If input mentions Scope 1, 2, or 3, you MUST match the correct activity type:
+- Scope 1 (direct emissions) → ONLY select "burned", "combustion", "burning" activities
+  Example: "Benzin" in Scope 1 → "petrol, burned in..." NOT "petrol production"
+- Scope 2 (energy) → Select "electricity production", "heat production"
+- Scope 3 (indirect) → Select "production", "manufacturing", "treatment" activities
+
+Rules:
+- CRITICAL: Match activities to the correct GHG scope (see above).
+- Prefer region order: requested region > GLO > RoW.
+- Prefer unit match to Referenzeinheit, but unit mismatch is NOT a reason to decompose.
+  Unit conversion will be handled automatically (e.g., 1 liter diesel → 36 MJ).
+
+DECISION LOGIC (CRITICAL - READ CAREFULLY):
+- IGNORE retrieval scores - they are NOT relevant for the decision!
+- Look ONLY at the dataset names and contexts, NOT at emission values or scores!
+- ONLY use "match" if there is EXACTLY ONE candidate that fits (e.g., only one "diesel burned in" dataset found).
+- ALWAYS use "ambiguous" if 2 or more candidates are reasonably suitable, INCLUDING:
+  ✓ Multiple candidates with different CONTEXTS (e.g., "burned in fishing vessel" vs "burned in building machine" vs "burned in agricultural machinery")
+  ✓ Multiple candidates with different geographies (GLO vs RoW vs specific country)
+  ✓ Multiple candidates with similar activities but different specifications
+
+  CONCRETE EXAMPLE - "Diesel Verbrennung":
+  If you see these in the top 10 candidates:
+  - "diesel, burned in building machine" (score: 0.0164)
+  - "diesel, burned in fishing vessel" (score: 0.0161)
+  - "diesel, burned in agricultural machinery" (score: 0.0159)
+  → These are DIFFERENT CONTEXTS (building machine ≠ fishing vessel ≠ agricultural machinery)!
+  → Return "ambiguous" with AT LEAST THE TOP 10 candidates, even though scores are similar!
+  → The USER must choose the correct context (building machine vs fishing vessel vs agricultural machinery), NOT the LLM!
+
+- For "ambiguous", include AT LEAST the top 10 candidates (or all if less than 10)
+- When in doubt, ALWAYS choose "ambiguous" - it's better to let humans decide than to guess!
+- ONLY use "decompose" for complex products that cannot be matched to any single activity:
+  ✓ Decompose: "Hamburger", "Laptop", "Kleidungsstück" (complex products with multiple materials)
+  ✗ NEVER decompose: "Diesel Verbrennung", "Transport", "Strom", "Heizung" (simple activities that have direct datasets)
+- If suitable candidates exist (even with different units), choose "match" or "ambiguous", NEVER decompose.
+- If NO candidate is a suitable match for the input, choose "decompose" and break the product into 3-10 physical components.
+  For decomposition, use these component categories: materials, energy, packaging, transport, processes.
+  For each component, provide a search query that can be used to find matching datasets in the next iteration.
+  Mark all quantity assumptions clearly in the "assumptions" array.
+
+You MUST respond with ONLY this JSON structure (no other text):
+
+{{
+  "decision": "match" | "ambiguous" | "decompose",
+  "match": {{
+    "UUID": "exact-uuid-from-candidates"
+  }},
+  "ambiguous": {{
+    "options": [
+      {{"UUID": "...", "why_short": "short reason this candidate is plausible"}},
+      ...
+    ]
+  }},
+  "decompose": {{
+    "assumptions": ["assumption 1", "assumption 2", ...],
+    "components": [
+      {{
+        "component_label": "materials",
+        "assumed_quantity": 1.0,
+        "assumed_unit": "kg",
+        "search_query_text": "search query for candidate retrieval"
+      }},
+      ...
+    ]
+  }}
+}}
+
+Include ONLY the relevant section based on your decision. For "match", include only the "match" object. For "ambiguous", include only the "ambiguous" object. For "decompose", include only the "decompose" object.
