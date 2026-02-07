@@ -25,9 +25,17 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 class LLMOrchestrator:
     """Manages Claude API calls for dataset selection and decomposition."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-20250514",
+        temperature: float = 0.2,
+        top_p: float = 0.4,
+    ):
+        self.client = anthropic.Anthropic(api_key=api_key, max_retries=5)
         self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
         self._system_prompt: Optional[str] = None
         self._selection_template: Optional[str] = None
 
@@ -61,17 +69,15 @@ class LLMOrchestrator:
         Returns:
             LLMDecision with the decision type and relevant data.
         """
-        # Format candidates for the prompt
+        # Format candidates for the prompt (emission values excluded to save tokens)
         candidates_data = []
         for c in candidates:
             candidates_data.append({
                 "UUID": c.dataset.uuid,
                 "Activity Name": c.dataset.activity_name,
                 "Geography": c.dataset.geography,
-                "Reference Product Name": c.dataset.product_name,
+                "Product": c.dataset.product_name,
                 "Unit": c.dataset.unit,
-                "Biogenic [kg CO2-Eq]": c.dataset.biogenic_kg,
-                "Total (excl. Biogenic) [kg CO2-Eq]": c.dataset.total_excl_bio_kg,
             })
 
         # Modify prompt if decomposition is not allowed (for component searches)
@@ -95,6 +101,8 @@ class LLMOrchestrator:
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=4096,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                     system=self.system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
                 )
@@ -166,48 +174,59 @@ Include ONLY the relevant section based on your decision."""
 
         This sends a targeted prompt asking only for decomposition, not selection.
         """
-        prompt = f"""The following product needs to be decomposed into its physical components for emission factor calculation.
-The product could not be matched directly because: {reason}
+        ref_unit = input_row.get('referenzeinheit', '')
+        prompt = f"""Decompose this product into physical components for emission factor calculation.
 
 Product:
 - Bezeichnung: "{input_row.get('bezeichnung', '')}"
 - Produktinformationen: "{input_row.get('produktinformationen', '')}"
-- Referenzeinheit: "{input_row.get('referenzeinheit', '')}"
+- Referenzeinheit: "{ref_unit}"
 - Region: "{input_row.get('region_norm', 'GLO')}"
 
-CRITICAL REQUIREMENT - Component Quantities:
-The sum of all assumed_quantity values MUST equal EXACTLY 1 {input_row.get('referenzeinheit', '')}.
+Reason for decomposition: {reason}
 
-Example for 1 kg Hamburger:
-- Beef patty: 0.40 kg
-- Bun: 0.30 kg
-- Cheese: 0.15 kg
-- Vegetables: 0.10 kg
-- Condiments: 0.05 kg
-→ Sum: 1.00 kg ✓
+====================================================================
+MANDATORY CONSTRAINT: The sum of ALL component quantities MUST = 1.0 {ref_unit}
+====================================================================
 
-WRONG Example (DO NOT DO THIS):
-- Beef: 0.15 kg
-- Chicken: 1.0 kg  ← This alone exceeds the reference unit!
-→ Sum: 1.15 kg ✗
+You are decomposing exactly 1 {ref_unit} of this product.
+Each component is a FRACTION of that 1 {ref_unit}.
+The fractions MUST add up to EXACTLY 1.0.
 
-Decompose this product into 3-10 physical components that together represent exactly 1 {input_row.get('referenzeinheit', '')} of the product.
-Use these categories: materials, energy, packaging, transport, processes.
-For each component, provide a search query in English that can find matching emission datasets in the ecoinvent database.
-Use standard units (kg, kWh, MJ, m, m2, m3, l, km, metric ton*km, unit, hour).
-All components should use the same unit as the reference unit ({input_row.get('referenzeinheit', '')}) where possible.
+EXAMPLE: Decomposing 1 kg Hamburger:
+  beef patty:  0.35 kg
+  wheat bun:   0.25 kg
+  cheese:      0.15 kg
+  lettuce:     0.08 kg
+  tomato:      0.07 kg
+  onion:       0.05 kg
+  condiments:  0.05 kg
+  ─────────────────────
+  TOTAL:       1.00 kg  <-- MUST equal 1.0
+
+WRONG (DO NOT DO THIS):
+  beef: 0.10 kg, bun: 0.08 kg, cheese: 0.02 kg = 0.20 kg TOTAL
+  This is WRONG because 0.20 ≠ 1.0 kg!
+
+Rules:
+- 3-10 physical components
+- All components should use "{ref_unit}" as unit where possible
+- Use English search queries for each component (for ecoinvent database)
+- component_label should be descriptive (e.g., "beef patty", "wheat bun", NOT generic "materials")
+
+BEFORE writing the JSON, mentally add up all quantities and verify the sum is 1.0 {ref_unit}.
 
 Respond with ONLY this JSON:
 
 {{
   "decision": "decompose",
   "decompose": {{
-    "assumptions": ["list all assumptions about material composition, weights, energy use, etc."],
+    "assumptions": ["list all assumptions about composition, weights, etc."],
     "components": [
       {{
-        "component_label": "materials | energy | packaging | transport | processes",
-        "assumed_quantity": 1.0,
-        "assumed_unit": "kg",
+        "component_label": "descriptive name",
+        "assumed_quantity": 0.35,
+        "assumed_unit": "{ref_unit}",
         "search_query_text": "English search query for ecoinvent database"
       }}
     ]
@@ -220,6 +239,8 @@ Respond with ONLY this JSON:
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=4096,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                     system=self.system_prompt,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -365,6 +386,8 @@ Example for "1 liter diesel" to "MJ":
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=1024,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                     system=self.system_prompt,
                     messages=[{"role": "user", "content": prompt}],
                 )

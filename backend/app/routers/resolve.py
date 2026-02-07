@@ -34,6 +34,8 @@ def _get_llm(request: Request) -> LLMOrchestrator:
         request.app.state._llm = LLMOrchestrator(
             api_key=settings.anthropic_api_key,
             model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            top_p=settings.llm_top_p,
         )
     return request.app.state._llm
 

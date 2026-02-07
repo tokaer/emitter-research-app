@@ -9,47 +9,60 @@ Input row:
 Candidates (each is a row from the ecoinvent database - do not modify any strings):
 {candidates_json}
 
-GHG SCOPE MATCHING (CRITICAL):
-If input mentions Scope 1, 2, or 3, you MUST match the correct activity type:
-- Scope 1 (direct emissions) → ONLY select "burned", "combustion", "burning" activities
-  Example: "Benzin" in Scope 1 → "petrol, burned in..." NOT "petrol production"
-- Scope 2 (energy) → Select "electricity production", "heat production"
-- Scope 3 (indirect) → Select "production", "manufacturing", "treatment" activities
+===== DECISION TREE (follow step by step) =====
 
-Rules:
-- CRITICAL: Match activities to the correct GHG scope (see above).
-- Prefer region order: requested region > GLO > RoW.
-- Prefer unit match to Referenzeinheit, but unit mismatch is NOT a reason to decompose.
-  Unit conversion will be handled automatically (e.g., 1 liter diesel → 36 MJ).
+STEP 1 - CLASSIFY THE INPUT:
+Is this a SIMPLE ACTIVITY that has direct ecoinvent datasets?
+Examples of SIMPLE activities (NEVER decompose these):
+  - Fuels: Diesel, Benzin, Heizoel, Erdgas, Kerosin, petrol, natural gas, LPG
+  - Energy: Strom, Elektrizitaet, Fernwaerme, electricity, heat
+  - Transport: LKW-Transport, Flugtransport, Schiffstransport, truck transport
+  - Combustion: any "Verbrennung" or burning activity
+  - Basic materials: Stahl, Beton, Holz, Papier, Kunststoff, Wasser
 
-DECISION LOGIC (CRITICAL - READ CAREFULLY):
-- IGNORE retrieval scores - they are NOT relevant for the decision!
-- Look ONLY at the dataset names and contexts, NOT at emission values or scores!
-- ONLY use "match" if there is EXACTLY ONE candidate that fits (e.g., only one "diesel burned in" dataset found).
-- ALWAYS use "ambiguous" if 2 or more candidates are reasonably suitable, INCLUDING:
-  ✓ Multiple candidates with different CONTEXTS (e.g., "burned in fishing vessel" vs "burned in building machine" vs "burned in agricultural machinery")
-  ✓ Multiple candidates with different geographies (GLO vs RoW vs specific country)
-  ✓ Multiple candidates with similar activities but different specifications
+If YES (simple activity) --> Go to STEP 2. You MUST NOT use "decompose".
+If NO (complex product like Hamburger, Laptop, Kleidung, Moebel) --> Go to STEP 3.
 
-  CONCRETE EXAMPLE - "Diesel Verbrennung":
-  If you see these in the top 10 candidates:
-  - "diesel, burned in building machine" (score: 0.0164)
-  - "diesel, burned in fishing vessel" (score: 0.0161)
-  - "diesel, burned in agricultural machinery" (score: 0.0159)
-  → These are DIFFERENT CONTEXTS (building machine ≠ fishing vessel ≠ agricultural machinery)!
-  → Return "ambiguous" with AT LEAST THE TOP 10 candidates, even though scores are similar!
-  → The USER must choose the correct context (building machine vs fishing vessel vs agricultural machinery), NOT the LLM!
+STEP 2 - SIMPLE ACTIVITY: Choose "match" or "ambiguous":
+Count how many candidates are PLAUSIBLE matches for this input.
+CRITICAL: IGNORE retrieval scores! Look ONLY at activity names and contexts!
 
-- For "ambiguous", include AT LEAST the top 10 candidates (or all if less than 10)
-- When in doubt, ALWAYS choose "ambiguous" - it's better to let humans decide than to guess!
-- ONLY use "decompose" for complex products that cannot be matched to any single activity:
-  ✓ Decompose: "Hamburger", "Laptop", "Kleidungsstück" (complex products with multiple materials)
-  ✗ NEVER decompose: "Diesel Verbrennung", "Transport", "Strom", "Heizung" (simple activities that have direct datasets)
-- If suitable candidates exist (even with different units), choose "match" or "ambiguous", NEVER decompose.
-- If NO candidate is a suitable match for the input, choose "decompose" and break the product into 3-10 physical components.
-  For decomposition, use these component categories: materials, energy, packaging, transport, processes.
-  For each component, provide a search query that can be used to find matching datasets in the next iteration.
-  Mark all quantity assumptions clearly in the "assumptions" array.
+- EXACTLY 1 plausible candidate exists --> "match"
+- 2 OR MORE plausible candidates exist --> "ambiguous"
+
+What counts as DIFFERENT candidates:
+  - Different CONTEXTS: "burned in building machine" vs "burned in fishing vessel" vs "burned in agricultural machinery" = 3 different candidates
+  - Different GEOGRAPHIES: GLO vs RoW vs CH vs DE = different candidates
+  - Different SPECIFICATIONS: "18.5kW" vs "74.57kW" vs ">500kW" = different candidates
+
+For "ambiguous": return ALL plausible candidates (at least top 10, or all if fewer).
+
+STEP 3 - COMPLEX PRODUCT: Choose "match", "ambiguous", or "decompose":
+Look at the candidates. Can any single candidate represent this product?
+- YES, exactly 1 --> "match"
+- YES, 2 or more --> "ambiguous"
+- NO, none match --> "decompose" into 3-10 physical components
+
+For decomposition:
+- Component quantities MUST sum to EXACTLY 1 {referenzeinheit}
+- Use English search queries for each component
+- Mark all assumptions
+
+===== GHG SCOPE MATCHING =====
+
+If input mentions Scope 1, 2, or 3:
+- Scope 1 (direct) --> ONLY select "burned", "combustion", "burning" activities
+- Scope 2 (energy) --> Select "electricity production", "heat production"
+- Scope 3 (indirect) --> Select "production", "manufacturing", "treatment"
+
+===== ADDITIONAL RULES =====
+
+- Prefer region: requested region > GLO > RoW > other
+- Unit mismatch is NOT a reason to decompose (conversion happens automatically)
+- When in doubt between match and ambiguous --> ALWAYS choose "ambiguous"
+- For "ambiguous", include AT LEAST the top 10 candidates with different contexts
+
+===== RESPONSE FORMAT =====
 
 You MUST respond with ONLY this JSON structure (no other text):
 
@@ -68,10 +81,10 @@ You MUST respond with ONLY this JSON structure (no other text):
     "assumptions": ["assumption 1", "assumption 2", ...],
     "components": [
       {{
-        "component_label": "materials",
+        "component_label": "descriptive label",
         "assumed_quantity": 1.0,
         "assumed_unit": "kg",
-        "search_query_text": "search query for candidate retrieval"
+        "search_query_text": "English search query for ecoinvent database"
       }},
       ...
     ]

@@ -39,6 +39,8 @@ def _get_llm(request: Request) -> LLMOrchestrator:
         request.app.state._llm = LLMOrchestrator(
             api_key=settings.anthropic_api_key,
             model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            top_p=settings.llm_top_p,
         )
     return request.app.state._llm
 
@@ -414,7 +416,12 @@ def _process_all_rows(
     embedding_index: EmbeddingIndex,
 ):
     """Background task to process all pending rows in a job."""
-    llm = LLMOrchestrator(api_key=settings.anthropic_api_key, model=settings.llm_model)
+    llm = LLMOrchestrator(
+        api_key=settings.anthropic_api_key,
+        model=settings.llm_model,
+        temperature=settings.llm_temperature,
+        top_p=settings.llm_top_p,
+    )
     calculator = Calculator(store)
     validator = Validator(store)
 

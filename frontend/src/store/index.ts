@@ -39,7 +39,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   // Job
   jobId: null,
-  mode: 'auto',
+  mode: 'review',
   setJobId: (id) => set({ jobId: id }),
   setMode: (mode) => set({ mode }),
 
