@@ -84,6 +84,33 @@ German units automatically mapped to ecoinvent:
 - Quadratmeter → m2
 - ...and more
 
+### 6. German→English Term Translation
+
+Since ecoinvent uses English activity names, a built-in dictionary (~300 entries) automatically expands German search terms with English equivalents before BM25 keyword search. This ensures that e.g. "Benzin" finds "petrol" datasets.
+
+**Covered categories** (16):
+
+| Category | Examples (DE → EN) |
+|---|---|
+| Fuels (28) | Benzin→petrol, Diesel→diesel, Erdgas→natural gas, Kohle→coal, Wasserstoff→hydrogen |
+| Energy (16) | Strom→electricity, Fernwärme→district heat, Photovoltaik→photovoltaic, BHKW→CHP |
+| Transport (22) | LKW→lorry, PKW→passenger car, Flug→aircraft flight, Schiff→ship, Bahn→train |
+| Metals (20) | Stahl→steel, Aluminium→aluminium, Kupfer→copper, Lithium→lithium, Messing→brass |
+| Plastics (22) | Kunststoff→polyethylene, PVC→polyvinylchloride, Styropor→EPS, Folie→film |
+| Chemicals (34) | Lösungsmittel→solvent, Kältemittel→refrigerant, Ammoniak→ammonia, Säuren→acids |
+| Construction (32) | Beton→concrete, Ziegel→brick, Dämmung→insulation, Fenster→window, Farbe→paint |
+| Wood (9) | Holz→timber, Sperrholz→plywood, Spanplatte→particle board, MDF→fibreboard |
+| Paper (10) | Papier→paper, Wellpappe→corrugated board, Zellstoff→pulp |
+| Glass (4) | Glas→flat glass, Glasfaser→glass fibre |
+| Textiles (16) | Baumwolle→cotton, Leder→leather, Polyester→PET fibre, Wolle→wool |
+| Food & Agriculture (40+) | Rindfleisch→beef, Milch→milk, Weizen→wheat, Dünger→fertiliser |
+| Water (7) | Trinkwasser→tap water, Abwasser→wastewater, Klärschlamm→sewage sludge |
+| Waste (16) | Müllverbrennung→waste incineration, Deponie→landfill, Elektroschrott→WEEE |
+| Electronics (18) | Laptop→notebook computer, Batterie→battery, Solarzelle→photovoltaic cell |
+| Processes (24) | Schweißen→welding, Gießen→casting, Spritzgießen→injection moulding |
+
+Terms not in the dictionary are still matched via semantic embeddings (FAISS), which handles cross-language similarity natively.
+
 ## Processing Pipeline
 
 Detailed step-by-step flow for each input row. Steps marked with **LLM** require a Claude API call; all others are deterministic algorithms.
