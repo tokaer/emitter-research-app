@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-4-20250514"
-    llm_temperature: float = 0.2
-    llm_top_p: float = 0.4
+    llm_temperature: float = 0.0
+    llm_top_p: float = 0.2
 
     # Search
     candidate_top_k: int = 20

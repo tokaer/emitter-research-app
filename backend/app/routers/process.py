@@ -430,10 +430,14 @@ def _process_all_rows(
     pending = [r for r in rows if r["status"] == "pending"]
 
     done = 0
-    for row in pending:
+    for i, row in enumerate(pending):
         process_row(row, store, retriever, llm, calculator, validator, mode)
         done += 1
         store.update_job_status(job_id, "processing", done_rows=done)
+        # Rate limit: wait between rows to stay under API token limits
+        if i < len(pending) - 1:
+            import time
+            time.sleep(15)
 
     # Check if all rows are done
     rows = store.get_input_rows(job_id)

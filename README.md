@@ -84,6 +84,181 @@ German units automatically mapped to ecoinvent:
 - Quadratmeter → m2
 - ...and more
 
+## Processing Pipeline
+
+Detailed step-by-step flow for each input row. Steps marked with **LLM** require a Claude API call; all others are deterministic algorithms.
+
+### Pipeline Overview
+
+```
+Upload ──> Normalize ──> Retrieve Candidates ──> LLM Decision ──> Calculate ──> Export
+  [algo]     [algo]          [algo]               [LLM]           [algo]       [algo]
+```
+
+### Step-by-Step Flow
+
+#### Step 1: Upload & Normalization `[Algorithm]`
+
+| Action | Method | Details |
+|--------|--------|---------|
+| Parse Excel | `template_parser.py` | Read .xlsx columns, validate required fields |
+| Normalize Bezeichnung | String ops | Lowercase, strip, transliterate (ä→a, ö→o) |
+| Map Region | Lookup table | "Europa" → "RER", "Deutschland" → "DE" |
+| Map Unit | `UNIT_MAP` dict | "Stück" → "unit", "Liter" → "l", "Kilogramm" → "kg" |
+
+**No LLM needed** - pure string operations and lookup tables.
+
+#### Step 2: Candidate Retrieval `[Algorithm]`
+
+| Action | Method | Details |
+|--------|--------|---------|
+| BM25 Search | `rank_bm25` | Keyword match against 17,586 activities → top 100 |
+| Embedding Search | FAISS + MiniLM-L12 | Semantic similarity → top 100 |
+| Reciprocal Rank Fusion | RRF formula | Merge both lists: `score = Σ 1/(k + rank)` |
+| Scope Hint | String append | Scope 1 → adds "combustion burned fuel" to query |
+| Region Sorting | Priority map | Exact match (0) > GLO (1) > RoW (2) > other (3) |
+| Unit Filtering | String compare | Prefer candidates matching the mapped unit |
+| Top-K Selection | Slice | Return top 20 candidates |
+
+**No LLM needed** - BM25 is statistical, FAISS is vector math, RRF is arithmetic.
+
+#### Step 3: LLM Decision `[LLM Call #1]`
+
+The LLM receives the input description + 20 candidates and decides:
+
+```
+                        ┌─────────────────┐
+  Input + Candidates ──>│  Claude Sonnet   │──> decision
+                        │  (temp=0, p=0.2) │
+                        └─────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                 ▼
+          "match"         "ambiguous"       "decompose"
+        1 best fit       2+ plausible      no fit found
+```
+
+**Decision rules** (enforced via prompt):
+
+| Decision | Condition | Example |
+|----------|-----------|---------|
+| `match` | Exactly 1 plausible candidate | "Stahl" → only one steel production dataset |
+| `ambiguous` | 2+ plausible candidates with different contexts, geographies, or specs | "Diesel Verbrennung" → burned in building machine / fishing vessel / agricultural machinery |
+| `decompose` | No single candidate matches (complex product) | "Hamburger" → needs beef + bun + cheese + vegetables |
+
+**Never decomposed**: Simple activities (Diesel, Benzin, Strom, Transport, Heizung, basic materials) always use match or ambiguous.
+
+#### Step 4a: Match Flow
+
+```
+  UUID selected
+       │
+       ▼
+  ┌──────────────────┐
+  │ Validate UUID     │ [Algorithm] - exists in DB? not a market activity?
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐     Units equal?
+  │ Compare Units     │ ──────────────── yes ──> quantity = 1.0
+  └────────┬─────────┘                            │
+           │ no                                   │
+           ▼                                      │
+  ┌──────────────────┐                            │
+  │ Unit Conversion   │ [LLM Call #2]             │
+  │ "1L Diesel=36MJ" │                            │
+  └────────┬─────────┘                            │
+           │ quantity = conversion_factor          │
+           ▼                                      ▼
+  ┌───────────────────────────────────────────────────────┐
+  │ Calculate Emissions                        [Algorithm] │
+  │                                                        │
+  │   biogenic_kg  = db_value × quantity                   │
+  │   common_kg    = db_value × quantity                   │
+  │   biogenic_t   = biogenic_kg / 1000                    │
+  │   common_t     = common_kg / 1000                      │
+  └────────┬──────────────────────────────────────────────┘
+           ▼
+  ┌──────────────────┐
+  │ Build Output      │ [Algorithm] - Beschreibung, Quelle, Provenance
+  └──────────────────┘
+```
+
+#### Step 4b: Ambiguous Flow
+
+```
+  Candidate list (10+ options)
+       │
+       ▼
+  ┌──────────────────┐
+  │ Save to DB        │ [Algorithm] - store candidates as JSON
+  │ Status: ambiguous │
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐
+  │ User selects      │ [Frontend UI] - user picks the correct dataset
+  │ via Resolve tab   │
+  └────────┬─────────┘
+           ▼
+       Continue with Match Flow (Step 4a)
+```
+
+#### Step 4c: Decompose Flow
+
+```
+  Components from LLM (3-10 parts, sum = 1.0 reference unit)
+       │
+       ▼  FOR EACH COMPONENT:
+  ┌──────────────────┐
+  │ Sub-Retrieval     │ [Algorithm] - same hybrid search per component
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐
+  │ Component Match   │ [LLM Call #2..#N] - match each component
+  │ (no decompose!)   │   to an ecoinvent dataset
+  └────────┬─────────┘
+           ▼
+  AFTER ALL COMPONENTS:
+  ┌──────────────────┐
+  │ Sum Validation    │ [Algorithm] - verify Σ quantities ≈ 1.0
+  └────────┬─────────┘
+           ▼
+  ┌──────────────────┐
+  │ Calculate per     │ [Algorithm] - emission × quantity per component
+  │ component + sum   │              then sum all components
+  └──────────────────┘
+```
+
+### LLM Call Summary
+
+| Scenario | LLM Calls | Example |
+|----------|-----------|---------|
+| Match, same unit | **1** | "Stahl, kg" → 1× decide |
+| Match, different unit | **2** | "Diesel, Liter" → 1× decide + 1× convert_unit |
+| Ambiguous | **1** | "Diesel Verbrennung" → 1× decide, user selects manually |
+| Ambiguous + different unit | **1 + 1** | decide + convert_unit after user selection |
+| Decompose (5 components) | **1 + 5** | 1× decide(=decompose) + 5× component matching |
+| Decompose (10 components) | **1 + 10** | 1× decide(=decompose) + 10× component matching |
+
+### What the LLM Does vs. What Algorithms Do
+
+| Task | Method | Why |
+|------|--------|-----|
+| **Semantic matching** (which dataset fits "Diesel Verbrennung"?) | LLM | Requires understanding of German product names, GHG scopes, and ecoinvent naming conventions |
+| **Decomposition** (break "Hamburger" into physical components) | LLM | Requires world knowledge about product composition |
+| **Unit conversion** (1 Liter Diesel = ? MJ) | LLM | Open-ended conversions including product-specific densities, energy content, and potentially monetary/daily-rate conversions |
+| Candidate retrieval (find relevant datasets) | Algorithm | BM25 + FAISS + RRF - statistical and vector-based |
+| Emission calculation (multiply + convert kg→t) | Algorithm | Pure arithmetic: `value × quantity / 1000` |
+| Validation (UUID exists? market activity?) | Algorithm | Database lookups |
+| Output formatting (Beschreibung, Quelle) | Algorithm | String templates with character limits |
+| Region/unit mapping | Algorithm | Lookup tables (UNIT_MAP, region normalization) |
+
+### Rate Limiting
+
+- **API limit**: 10,000 input tokens/minute (Anthropic)
+- **Per-request**: ~2,000 tokens (20 candidates × ~100 tokens each)
+- **Mitigation**: 15-second delay between rows, `max_retries=5` with exponential backoff
+- **Decomposition retry**: If component sum ≠ 1.0, LLM is asked to correct (up to 3 attempts)
+
 ## Installation
 
 ### Prerequisites
@@ -226,7 +401,7 @@ CSV_PATH=../data/Cut-off Cumulative LCIA v3.11 Kopie.csv
 DB_PATH=../data/emitter.db
 FAISS_INDEX_PATH=../data/embeddings/index.faiss
 FAISS_METADATA_PATH=../data/embeddings/metadata.pkl
-CANDIDATE_TOP_K=50
+CANDIDATE_TOP_K=20
 RRF_K=60
 CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```

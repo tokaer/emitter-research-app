@@ -233,7 +233,9 @@ Respond with ONLY this JSON:
   }}
 }}"""
 
+        messages = [{"role": "user", "content": prompt}]
         last_error = None
+
         for attempt in range(max_retries):
             try:
                 response = self.client.messages.create(
@@ -242,10 +244,43 @@ Respond with ONLY this JSON:
                     temperature=self.temperature,
                     top_p=self.top_p,
                     system=self.system_prompt,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=messages,
                 )
                 raw_text = response.content[0].text
-                return self._parse_response(raw_text, candidates=[])
+                decision = self._parse_response(raw_text, candidates=[])
+
+                # Validate decomposition sum
+                if decision.components:
+                    total = sum(c.assumed_quantity for c in decision.components)
+                    if not (0.95 <= total <= 1.05):
+                        logger.warning(
+                            f"Decomposition sum {total:.3f} != 1.0 {ref_unit} "
+                            f"(attempt {attempt + 1}/{max_retries}). Retrying..."
+                        )
+                        # Add correction feedback and retry
+                        comp_list = ", ".join(
+                            f"{c.component_label}: {c.assumed_quantity}"
+                            for c in decision.components
+                        )
+                        messages = [
+                            {"role": "user", "content": prompt},
+                            {"role": "assistant", "content": raw_text},
+                            {"role": "user", "content": (
+                                f"WRONG! Your components sum to {total:.3f} {ref_unit}, "
+                                f"but MUST sum to exactly 1.0 {ref_unit}. "
+                                f"Components: {comp_list}. "
+                                f"Please recalculate with quantities that sum to 1.0 {ref_unit}. "
+                                f"Return the corrected JSON only."
+                            )},
+                        ]
+                        if attempt < max_retries - 1:
+                            continue
+                        # Last attempt still wrong - raise
+                        raise ValueError(
+                            f"Decomposition sum {total:.3f} != 1.0 after {max_retries} attempts"
+                        )
+
+                return decision
 
             except (json.JSONDecodeError, KeyError, ValueError) as e:
                 last_error = e
